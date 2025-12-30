@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 流程圖生成器 </title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+
+    <style>
+        :root { --primary-color: #2563eb; --bg-color: #f8fafc; --panel-bg: #ffffff; --border-color: #e2e8f0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; background-color: var(--bg-color); overflow: hidden; }
+        
+        #sidebar { width: 350px; background: var(--panel-bg); border-right: 1px solid var(--border-color); padding: 20px; display: flex; flex-direction: column; box-shadow: 2px 0 5px rgba(0,0,0,0.05); z-index: 10; overflow-y: auto; }
+        h2 { margin-top: 0; font-size: 1.2rem; color: #1e293b; display: flex; align-items: center; gap: 8px;}
+        label { font-size: 0.85rem; font-weight: bold; color: #334155; margin-bottom: 5px; display: block;}
+        input[type="text"], input[type="password"], select { width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 15px; box-sizing: border-box; background: #fff; }
+        textarea { width: 100%; height: 120px; padding: 10px; border: 1px solid var(--border-color); border-radius: 6px; font-family: monospace; resize: vertical; margin-bottom: 10px; font-size: 14px; box-sizing: border-box; }
+        
+        button { background-color: var(--primary-color); color: white; border: none; padding: 10px 15px; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; display: flex; justify-content: center; align-items: center; gap: 5px; margin-bottom: 10px; }
+        button:hover { background-color: #1d4ed8; }
+        button:disabled { background-color: #94a3b8; cursor: not-allowed; }
+        
+        .btn-outline { background-color: transparent; border: 1px solid var(--primary-color); color: var(--primary-color); margin-top: 5px; }
+        .btn-outline:hover { background-color: #eff6ff; }
+        .btn-success { background-color: #10b981; color: white; margin-top: 5px; }
+        .btn-success:hover { background-color: #059669; }
+        .btn-danger { background-color: #ef4444; color: white; margin-top: 5px; }
+        .btn-danger:hover { background-color: #dc2626; }
+        
+        /* 連線模式啟動時的按鈕樣式 */
+        .mode-active { background-color: #059669 !important; box-shadow: inset 0 3px 5px rgba(0,0,0,0.2); }
+
+        #edit-panel { margin-top: 20px; padding: 15px; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; display: none; }
+        #selected-type-label { font-size: 0.75rem; color: #b45309; font-weight: bold; text-transform: uppercase; margin-bottom: 5px; }
+        #image-upload-section { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #cbd5e1; }
+
+        #cy { flex: 1; background-color: #fff; background-image: radial-gradient(#e5e7eb 1px, transparent 1px); background-size: 20px 20px; }
+        .loading-spinner { border: 3px solid #f3f3f3; border-radius: 50%; border-top: 3px solid #fff; width: 16px; height: 16px; animation: spin 1s linear infinite; display: none; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #toast { position: fixed; top: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 5px; display: none; z-index: 100; }
+    </style>
+</head>
+<body>
+
+    <div id="toast"></div>
+
+    <div id="sidebar">
+        <h2>✨ AI 流程圖生成器</h2>
+        
+        <label for="api-key">Gemini API Key:</label>
+        <input type="password" id="api-key" placeholder="貼上你的 API Key" autocomplete="off">
+
+        <label>選擇模型:</label>
+        <select id="model-name">
+            <option value="gemini-3-flash">gemini-3-flash</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+            <option value="gemini-2.5-flash-tts">gemini-2.5-flash-tts</option>
+            <option value="gemini-robotics-er-1.5-preview">gemini-robotics-er-1.5-preview</option>
+        </select>
+
+        <label for="input-text">描述你的流程:</label>
+        <textarea id="input-text" placeholder="例如：&#10;PowerShell 腳本執行後，會先移除 BOM，然後轉成 UTF8。資料會進入 Router 進行分流，合法的資料存入 HDFS Current，不合法的資料丟到 Error 資料夾。最後由 Hive 進行分析。">資料從 Oracle DB 抽出，經過 Python 清洗，最後寫入 SQL Server 報表庫。</textarea>
+        
+        <button id="btn-generate" onclick="callGeminiAPI()">
+            <span class="loading-spinner" id="spinner"></span>
+            <span>⚡ AI 生成圖表</span>
+        </button>
+        <button class="btn-outline" onclick="loadDemoStyle()">🎨 重新對應圖示</button>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
+        
+        <label>手動調整工具:</label>
+        <button class="btn-success" onclick="addNode()">➕ 新增空白節點</button>
+        
+        <button id="btn-connect-mode" onclick="toggleConnectMode()">🔗 連線模式 (點擊兩點連線)</button>
+        
+        <p style="font-size: 12px; color: #666; margin-top: 5px; margin-bottom: 10px;">
+            操作提示：<br>
+            1. 按下「連線模式」變綠色。<br>
+            2. 依序點擊 <b>起點</b> 與 <b>終點</b>。<br>
+            3. 選中項目按 Delete 可刪除。
+        </p>
+
+        <div id="edit-panel">
+            <div id="selected-type-label">編輯屬性</div>
+            <label>顯示文字 (Label):</label>
+            <input type="text" id="edit-label-input" placeholder="輸入新的文字...">
+            <div id="image-upload-section">
+                <label style="font-size: 0.8rem; display:block; margin-bottom:5px;">更換圖片:</label>
+                <input type="file" id="upload-image" accept="image/*">
+            </div>
+            <button class="btn-danger" onclick="deleteSelected()">❌ 刪除此項目</button>
+        </div>
+    </div>
+
+    <div id="cy"></div>
+
+    <script>
+        var cy = null;
+        var selectedElement = null;
+        var isConnectMode = false; // 連線模式狀態
+        var sourceNode = null;     // 連線起點
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.style.display = 'block';
+            setTimeout(() => t.style.display = 'none', 3000);
+        }
+
+        window.onload = function() {
+            if (typeof cytoscape === 'undefined') {
+                alert("❌ 嚴重錯誤：繪圖核心無法載入，請檢查網路。");
+                return;
+            }
+            try {
+                // 初始化 Cytoscape
+                cy = cytoscape({
+                    container: document.getElementById('cy'),
+                    style: [
+                        { 
+                            selector: 'node', 
+                            style: { 
+                                'label': 'data(label)', 
+                                'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': 8, 
+                                'background-color': '#f1f5f9', 'border-width': 2, 'border-color': '#cbd5e1',
+                                'width': 60, 'height': 60, 'font-size': '12px', 'color': '#333', 
+                                'text-wrap': 'wrap', 'text-max-width': 80, 'shape': 'round-rectangle',
+                                'background-image': 'data:image/svg+xml;utf8,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%2394a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"%3E%3Crect x="3" y="3" width="18" height="18" rx="2" ry="2"%3E%3C/rect%3E%3C/svg%3E',
+                                'background-fit': 'cover', 'background-opacity': 0.5
+                            } 
+                        },
+                        { 
+                            selector: 'edge', 
+                            style: { 
+                                'width': 2, 'line-color': '#64748b', 'target-arrow-color': '#64748b', 
+                                'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 
+                                'label': 'data(label)', 'font-size': '10px', 'text-background-color': '#fff', 
+                                'text-background-opacity': 0.8, 'text-rotation': 'autorotate' 
+                            } 
+                        },
+                        { selector: ':selected', style: { 'border-color': '#2563eb', 'border-width': 4, 'line-color': '#2563eb', 'target-arrow-color': '#2563eb' } },
+                        // 連線起點的高亮樣式
+                        { selector: '.highlight-source', style: { 'border-color': '#059669', 'border-width': 4 } }
+                    ],
+                    layout: { name: 'dagre', rankDir: 'LR', padding: 50 }
+                });
+
+                // ★ 綁定點擊事件 (處理連線 與 編輯) ★
+                cy.on('tap', function(evt){
+                    const element = evt.target;
+                    
+                    // --- 1. 連線模式邏輯 ---
+                    if (isConnectMode && element !== cy && element.isNode()) {
+                        if (!sourceNode) {
+                            // 選取起點
+                            sourceNode = element;
+                            element.addClass('highlight-source');
+                            showToast("已選取起點，請點擊目標節點...");
+                        } else {
+                            // 選取終點並連線
+                            if (sourceNode.id() !== element.id()) {
+                                cy.add({ group: 'edges', data: { source: sourceNode.id(), target: element.id() } });
+                                showToast("連線成功！");
+                            }
+                            // 重置
+                            sourceNode.removeClass('highlight-source');
+                            sourceNode = null;
+                        }
+                        return; // 連線模式下不開啟編輯面板
+                    }
+
+                    // --- 2. 一般編輯模式 ---
+                    const editPanel = document.getElementById('edit-panel');
+                    if (element === cy) {
+                        editPanel.style.display = 'none';
+                        selectedElement = null;
+                        return;
+                    }
+
+                    editPanel.style.display = 'block';
+                    selectedElement = element;
+                    document.getElementById('edit-label-input').value = element.data('label') || '';
+
+                    const typeLabel = document.getElementById('selected-type-label');
+                    const imageSection = document.getElementById('image-upload-section');
+                    const uploadInput = document.getElementById('upload-image');
+
+                    if (element.isNode()) {
+                        typeLabel.textContent = "編輯節點 (ICON)";
+                        imageSection.style.display = 'block';
+                        uploadInput.value = ''; 
+                    } else if (element.isEdge()) {
+                        typeLabel.textContent = "編輯連線 (LINE)";
+                        imageSection.style.display = 'none';
+                    }
+                });
+
+                // 鍵盤 Delete 刪除
+                document.addEventListener('keydown', function(event) {
+                    if ((event.key === 'Delete' || event.key === 'Backspace') && selectedElement) {
+                        if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+                        deleteSelected();
+                    }
+                });
+
+                // 文字輸入監聽
+                document.getElementById('edit-label-input').addEventListener('input', function(e){
+                    if(selectedElement) selectedElement.data('label', e.target.value);
+                });
+
+                // 圖片上傳監聽
+                document.getElementById('upload-image').addEventListener('change', function(e){
+                    if(!selectedElement || !selectedElement.isNode()) return;
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        selectedElement.style({ 
+                            'background-image': event.target.result, 'background-color': 'transparent', 
+                            'border-width': 0, 'width': 80, 'height': 80, 'background-opacity': 1
+                        });
+                    };
+                    reader.readAsDataURL(file);
+                });
+
+            } catch (e) { console.error(e); alert("初始化失敗：" + e.message); }
+        };
+
+        // ★ 切換連線模式 ★
+        function toggleConnectMode() {
+            isConnectMode = !isConnectMode;
+            const btn = document.getElementById('btn-connect-mode');
+            if (isConnectMode) {
+                btn.classList.add('mode-active');
+                btn.textContent = "🔗 連線中... (點擊 A 再點擊 B)";
+                showToast("進入連線模式：請依序點擊兩個節點");
+            } else {
+                btn.classList.remove('mode-active');
+                btn.textContent = "🔗 連線模式 (點擊兩點連線)";
+                if (sourceNode) sourceNode.removeClass('highlight-source');
+                sourceNode = null;
+            }
+        }
+
+        function addNode() {
+            const pan = cy.pan();
+            const zoom = cy.zoom();
+            const centerX = -pan.x / zoom + (cy.width() / 2 / zoom);
+            const centerY = -pan.y / zoom + (cy.height() / 2 / zoom);
+            
+            cy.add({
+                group: 'nodes',
+                data: { id: 'node_' + Date.now(), label: 'New Node' },
+                position: { x: centerX, y: centerY },
+                style: { 'background-color': '#e2e8f0' }
+            });
+            showToast("已新增節點");
+            loadDemoStyle(); 
+        }
+
+        function deleteSelected() {
+            if (selectedElement) {
+                cy.remove(selectedElement);
+                document.getElementById('edit-panel').style.display = 'none';
+                selectedElement = null;
+                showToast("已刪除項目");
+            }
+        }
+
+        async function callGeminiAPI() {
+            if (!cy) { alert("繪圖引擎尚未準備好。"); return; }
+            const apiKey = document.getElementById('api-key').value.trim();
+            const promptText = document.getElementById('input-text').value.trim();
+            
+            // ★ 修改：從下拉選單獲取模型名稱 ★
+            const modelName = document.getElementById('model-name').value.trim();
+            
+            const btn = document.getElementById('btn-generate');
+            const spinner = document.getElementById('spinner');
+
+            if (!apiKey) { alert("請先輸入 API Key！"); return; }
+            if (!promptText) { alert("請輸入流程描述！"); return; }
+
+            btn.disabled = true; spinner.style.display = 'block';
+
+            const systemInstruction = `你是一個流程圖專家。請將描述轉換為 Graph JSON。規則：1.只回傳 JSON，無 markdown。2.JSON 含 "nodes"(id, label) 和 "edges"(source, target, label)。3.節點 label 盡量簡潔，保留關鍵技術名稱。`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
+            try {
+                const response = await fetch(apiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ parts: [{ text: systemInstruction + "\n\n使用者輸入:\n" + promptText }] }] }) });
+                const data = await response.json();
+                if (data.error) throw new Error(data.error.message);
+                if (!data.candidates || data.candidates.length === 0) throw new Error("模型沒有回傳內容。");
+
+                let aiText = data.candidates[0].content.parts[0].text;
+                aiText = aiText.replace(/```json/g, '').replace(/```/g, '').trim();
+                const graphData = JSON.parse(aiText);
+                
+                renderGraph(graphData);
+                loadDemoStyle(); 
+
+            } catch (error) {
+                console.error("API Error:", error);
+                alert(`❌ 生成失敗：${error.message}`);
+            } finally {
+                btn.disabled = false; spinner.style.display = 'none';
+            }
+        }
+
+        function renderGraph(data) {
+            cy.elements().remove();
+            const elements = [];
+            data.nodes.forEach(node => elements.push({ data: { id: node.id, label: node.label } }));
+            data.edges.forEach(edge => elements.push({ data: { source: edge.source, target: edge.target, label: edge.label || '' } }));
+            cy.add(elements);
+            cy.layout({ name: 'dagre', rankDir: 'LR', animate: true, animationDuration: 800 }).run();
+        }
+
+        function loadDemoStyle() {
+            if(!cy) return;
+            const iconMap = {
+                'oracle': 'https://img.icons8.com/?size=100&id=39913&format=png&color=000000',
+                'sql': 'https://img.icons8.com/?size=100&id=laYYF3dV0Iew&format=png&color=000000',
+                'mysql': 'https://img.icons8.com/?size=100&id=qGUfLiYi1bRN&format=png&color=000000',
+                'hive': 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTE-GfMlX7r1ppEiiRDR2tnCo5k9qehYEDZKQ&s',
+                'hdfs': 'https://www.cdata.com/ui/img/logo-hdfs.png',
+                'mongo': 'https://img.icons8.com/?size=100&id=bosfpvRzNOG8&format=png&color=000000',
+                'txt' : 'https://img.icons8.com/?size=100&id=DwnDqUdRSKDh&format=png&color=000000',
+                'trinityserver' : 'https://img.icons8.com/?size=100&id=XXZxxD0Plaaj&format=png&color=000000',
+                'trinityagent' : 'https://img.icons8.com/?size=100&id=997&format=png&color=000000',
+                'csv' : 'https://img.icons8.com/?size=100&id=21Ss4P1afplY&format=png&color=000000',
+                'transformer' :'https://img.icons8.com/?size=100&id=WkAsYsArs9Sc&format=png&color=000000',
+                'python': 'https://cdn-icons-png.flaticon.com/512/5968/5968350.png',
+                'power shell': 'https://upload.wikimedia.org/wikipedia/commons/a/af/PowerShell_Core_6.0_icon.png', 
+                'powershell': 'https://upload.wikimedia.org/wikipedia/commons/a/af/PowerShell_Core_6.0_icon.png', 
+                'script': 'https://cdn-icons-png.flaticon.com/512/2965/2965335.png',
+                'error': 'https://cdn-icons-png.flaticon.com/512/10435/10435129.png',
+                'router': 'https://img.icons8.com/?size=100&id=lIPVBw1hMKkS&format=png&color=000000', 
+                'mail': 'https://voca-land.sgp1.cdn.digitaloceanspaces.com/43844/1654352482228/0b0122e9c136d2f515be3bcfb699c000a7585be38a341162dd62f28758080e78.png',
+                'report': 'https://cdn-icons-png.flaticon.com/512/1055/1055644.png'
+            };
+            const defaultIcon = 'https://cdn-icons-png.flaticon.com/512/12409/12409459.png';
+
+            cy.nodes().forEach(node => {
+                const currentBg = node.style('background-image');
+                if (currentBg && currentBg.startsWith('data:image/svg')) {
+                    const label = (node.data('label') || '').toLowerCase();
+                    let assignedIcon = defaultIcon;
+                    for (const [key, url] of Object.entries(iconMap)) {
+                        if (label.includes(key)) { assignedIcon = url; break; }
+                    }
+                    if (assignedIcon !== defaultIcon) {
+                        node.style({
+                            'background-image': assignedIcon, 'background-color': 'transparent',
+                            'border-width': 0, 'width': 60, 'height': 60, 'background-opacity': 1
+                        });
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
