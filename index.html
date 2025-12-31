@@ -3,10 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 流程圖生成器 </title>
+    <title>AI 流程圖生成器 (自訂模型版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
-    
     <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 
@@ -31,7 +30,6 @@
         .btn-danger { background-color: #ef4444; color: white; margin-top: 5px; }
         .btn-danger:hover { background-color: #dc2626; }
         
-        /* 連線模式啟動時的按鈕樣式 */
         .mode-active { background-color: #059669 !important; box-shadow: inset 0 3px 5px rgba(0,0,0,0.2); }
 
         #edit-panel { margin-top: 20px; padding: 15px; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; display: none; }
@@ -42,6 +40,10 @@
         .loading-spinner { border: 3px solid #f3f3f3; border-radius: 50%; border-top: 3px solid #fff; width: 16px; height: 16px; animation: spin 1s linear infinite; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         #toast { position: fixed; top: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 5px; display: none; z-index: 100; }
+        
+        /* 自訂模型輸入框樣式 */
+        #custom-model-container { display: none; margin-top: -10px; margin-bottom: 10px; }
+        #custom-model-input { border-color: #f59e0b; background-color: #fffbeb; }
     </style>
 </head>
 <body>
@@ -55,13 +57,20 @@
         <input type="password" id="api-key" placeholder="貼上你的 API Key" autocomplete="off">
 
         <label>選擇模型:</label>
-        <select id="model-name">
+        <select id="model-select" onchange="checkCustomModel()">
             <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
             <option value="gemini-2.5-flash">gemini-2.5-flash</option>
             <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
             <option value="gemini-2.5-flash-tts">gemini-2.5-flash-tts</option>
             <option value="gemini-robotics-er-1.5-preview">gemini-robotics-er-1.5-preview</option>
+            <option value="gemini-1.5-flash">gemini-1.5-flash (穩定版)</option>
+            <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp</option>
+            <option value="custom">✏️ 手動輸入模型名稱...</option>
         </select>
+        
+        <div id="custom-model-container">
+            <input type="text" id="custom-model-input" placeholder="請輸入模型 ID (如 gemini-pro)">
+        </div>
 
         <label for="input-text">描述你的流程:</label>
         <textarea id="input-text" placeholder="例如：&#10;PowerShell 腳本執行後，會先移除 BOM，然後轉成 UTF8。資料會進入 Router 進行分流，合法的資料存入 HDFS Current，不合法的資料丟到 Error 資料夾。最後由 Hive 進行分析。">資料從 Oracle DB 抽出，經過 Python 清洗，最後寫入 SQL Server 報表庫。</textarea>
@@ -102,8 +111,8 @@
     <script>
         var cy = null;
         var selectedElement = null;
-        var isConnectMode = false; // 連線模式狀態
-        var sourceNode = null;     // 連線起點
+        var isConnectMode = false; 
+        var sourceNode = null;     
 
         function showToast(msg) {
             const t = document.getElementById('toast');
@@ -112,13 +121,24 @@
             setTimeout(() => t.style.display = 'none', 3000);
         }
 
+        // 檢查是否選擇了自訂模型
+        function checkCustomModel() {
+            const select = document.getElementById('model-select');
+            const customInputDiv = document.getElementById('custom-model-container');
+            if (select.value === 'custom') {
+                customInputDiv.style.display = 'block';
+                document.getElementById('custom-model-input').focus();
+            } else {
+                customInputDiv.style.display = 'none';
+            }
+        }
+
         window.onload = function() {
             if (typeof cytoscape === 'undefined') {
                 alert("❌ 嚴重錯誤：繪圖核心無法載入，請檢查網路。");
                 return;
             }
             try {
-                // 初始化 Cytoscape
                 cy = cytoscape({
                     container: document.getElementById('cy'),
                     style: [
@@ -144,37 +164,30 @@
                             } 
                         },
                         { selector: ':selected', style: { 'border-color': '#2563eb', 'border-width': 4, 'line-color': '#2563eb', 'target-arrow-color': '#2563eb' } },
-                        // 連線起點的高亮樣式
                         { selector: '.highlight-source', style: { 'border-color': '#059669', 'border-width': 4 } }
                     ],
                     layout: { name: 'dagre', rankDir: 'LR', padding: 50 }
                 });
 
-                // ★ 綁定點擊事件 (處理連線 與 編輯) ★
                 cy.on('tap', function(evt){
                     const element = evt.target;
                     
-                    // --- 1. 連線模式邏輯 ---
                     if (isConnectMode && element !== cy && element.isNode()) {
                         if (!sourceNode) {
-                            // 選取起點
                             sourceNode = element;
                             element.addClass('highlight-source');
                             showToast("已選取起點，請點擊目標節點...");
                         } else {
-                            // 選取終點並連線
                             if (sourceNode.id() !== element.id()) {
                                 cy.add({ group: 'edges', data: { source: sourceNode.id(), target: element.id() } });
                                 showToast("連線成功！");
                             }
-                            // 重置
                             sourceNode.removeClass('highlight-source');
                             sourceNode = null;
                         }
-                        return; // 連線模式下不開啟編輯面板
+                        return; 
                     }
 
-                    // --- 2. 一般編輯模式 ---
                     const editPanel = document.getElementById('edit-panel');
                     if (element === cy) {
                         editPanel.style.display = 'none';
@@ -200,7 +213,6 @@
                     }
                 });
 
-                // 鍵盤 Delete 刪除
                 document.addEventListener('keydown', function(event) {
                     if ((event.key === 'Delete' || event.key === 'Backspace') && selectedElement) {
                         if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
@@ -208,12 +220,10 @@
                     }
                 });
 
-                // 文字輸入監聽
                 document.getElementById('edit-label-input').addEventListener('input', function(e){
                     if(selectedElement) selectedElement.data('label', e.target.value);
                 });
 
-                // 圖片上傳監聽
                 document.getElementById('upload-image').addEventListener('change', function(e){
                     if(!selectedElement || !selectedElement.isNode()) return;
                     const file = e.target.files[0];
@@ -231,7 +241,6 @@
             } catch (e) { console.error(e); alert("初始化失敗：" + e.message); }
         };
 
-        // ★ 切換連線模式 ★
         function toggleConnectMode() {
             isConnectMode = !isConnectMode;
             const btn = document.getElementById('btn-connect-mode');
@@ -277,13 +286,17 @@
             const apiKey = document.getElementById('api-key').value.trim();
             const promptText = document.getElementById('input-text').value.trim();
             
-            // ★ 修改：從下拉選單獲取模型名稱 ★
-            const modelName = document.getElementById('model-name').value.trim();
+            // ★ 修改：智慧獲取模型名稱 (下拉選單 或 手動輸入) ★
+            let modelName = document.getElementById('model-select').value.trim();
+            if (modelName === 'custom') {
+                modelName = document.getElementById('custom-model-input').value.trim();
+            }
             
             const btn = document.getElementById('btn-generate');
             const spinner = document.getElementById('spinner');
 
             if (!apiKey) { alert("請先輸入 API Key！"); return; }
+            if (!modelName) { alert("請輸入模型名稱！"); return; }
             if (!promptText) { alert("請輸入流程描述！"); return; }
 
             btn.disabled = true; spinner.style.display = 'block';
