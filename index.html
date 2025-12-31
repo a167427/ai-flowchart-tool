@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 流程圖生成器 (自訂模型版)</title>
+    <title>AI 流程圖生成器 (響應式優化版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
@@ -13,7 +13,31 @@
         :root { --primary-color: #2563eb; --bg-color: #f8fafc; --panel-bg: #ffffff; --border-color: #e2e8f0; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; background-color: var(--bg-color); overflow: hidden; }
         
-        #sidebar { width: 350px; background: var(--panel-bg); border-right: 1px solid var(--border-color); padding: 20px; display: flex; flex-direction: column; box-shadow: 2px 0 5px rgba(0,0,0,0.05); z-index: 10; overflow-y: auto; }
+        /* --- 修改：Sidebar 樣式 (加入 resize 與 transition) --- */
+        #sidebar { 
+            width: 350px; 
+            min-width: 250px; /* 防止拉太小 */
+            max-width: 600px; /* 防止拉太大 */
+            background: var(--panel-bg); 
+            border-right: 1px solid var(--border-color); 
+            padding: 20px; 
+            display: flex; 
+            flex-direction: column; 
+            box-shadow: 2px 0 5px rgba(0,0,0,0.05); 
+            z-index: 10; 
+            overflow-y: auto; 
+            
+            /* ★ 重點：允許使用者拖拉邊緣調整寬度 ★ */
+            resize: horizontal; 
+            overflow-x: hidden;
+            transition: transform 0.3s ease; /* 收折時的動畫 */
+        }
+        
+        /* 當加上 collapsed class 時，將 sidebar 移出畫面 */
+        #sidebar.collapsed {
+            display: none;
+        }
+
         h2 { margin-top: 0; font-size: 1.2rem; color: #1e293b; display: flex; align-items: center; gap: 8px;}
         label { font-size: 0.85rem; font-weight: bold; color: #334155; margin-bottom: 5px; display: block;}
         input[type="text"], input[type="password"], select { width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 15px; box-sizing: border-box; background: #fff; }
@@ -36,14 +60,45 @@
         #selected-type-label { font-size: 0.75rem; color: #b45309; font-weight: bold; text-transform: uppercase; margin-bottom: 5px; }
         #image-upload-section { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #cbd5e1; }
 
+        /* 畫布區域：設為 relative 以便放置浮動按鈕 */
+        #cy-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            overflow: hidden;
+        }
+
         #cy { flex: 1; background-color: #fff; background-image: radial-gradient(#e5e7eb 1px, transparent 1px); background-size: 20px 20px; }
+        
         .loading-spinner { border: 3px solid #f3f3f3; border-radius: 50%; border-top: 3px solid #fff; width: 16px; height: 16px; animation: spin 1s linear infinite; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         #toast { position: fixed; top: 20px; right: 20px; background: #333; color: #fff; padding: 10px 20px; border-radius: 5px; display: none; z-index: 100; }
         
-        /* 自訂模型輸入框樣式 */
         #custom-model-container { display: none; margin-top: -10px; margin-bottom: 10px; }
         #custom-model-input { border-color: #f59e0b; background-color: #fffbeb; }
+
+        /* --- 新增：收折按鈕樣式 --- */
+        #toggle-sidebar-btn {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 999;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: white;
+            color: #333;
+            border: 1px solid #cbd5e1;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0;
+            transition: all 0.2s;
+        }
+        #toggle-sidebar-btn:hover { background: #f1f5f9; transform: scale(1.1); }
     </style>
 </head>
 <body>
@@ -106,7 +161,10 @@
         </div>
     </div>
 
-    <div id="cy"></div>
+    <div id="cy-container">
+        <button id="toggle-sidebar-btn" onclick="toggleSidebar()" title="收折/展開側邊欄">◀</button>
+        <div id="cy"></div>
+    </div>
 
     <script>
         var cy = null;
@@ -121,7 +179,26 @@
             setTimeout(() => t.style.display = 'none', 3000);
         }
 
-        // 檢查是否選擇了自訂模型
+        // --- 新增：切換側邊欄 ---
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const btn = document.getElementById('toggle-sidebar-btn');
+            
+            sidebar.classList.toggle('collapsed');
+            
+            // 重新計算圖表大小 (因為畫布寬度變了)
+            setTimeout(() => {
+                if(cy) cy.resize();
+            }, 300);
+
+            // 改變按鈕箭頭
+            if (sidebar.classList.contains('collapsed')) {
+                btn.textContent = "▶";
+            } else {
+                btn.textContent = "◀";
+            }
+        }
+
         function checkCustomModel() {
             const select = document.getElementById('model-select');
             const customInputDiv = document.getElementById('custom-model-container');
@@ -286,7 +363,6 @@
             const apiKey = document.getElementById('api-key').value.trim();
             const promptText = document.getElementById('input-text').value.trim();
             
-            // ★ 修改：智慧獲取模型名稱 (下拉選單 或 手動輸入) ★
             let modelName = document.getElementById('model-select').value.trim();
             if (modelName === 'custom') {
                 modelName = document.getElementById('custom-model-input').value.trim();
@@ -379,6 +455,4 @@
         }
     </script>
 </body>
-
 </html>
-
